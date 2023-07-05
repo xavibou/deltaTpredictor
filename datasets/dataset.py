@@ -9,8 +9,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
 import datetime
-from pytorch_histogram_matching import Histogram_Matching
-#from pl_bolts.models.self_supervised.moco.transforms import GaussianBlur, imagenet_normalization
+from skimage.exposure import match_histograms
 
 ALL_BANDS = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B8', 'B8A', 'B9', 'B11', 'B12']
 RGB_BANDS = ['B4', 'B3', 'B2']
@@ -36,7 +35,7 @@ class DeltaTimeBase(Dataset):
         self.root = Path(root)
         self.bands = bands if bands is not None else RGB_BANDS
         self.transform = transform
-        self.HM = Histogram_Matching(differentiable=True)
+        #self.HM = Histogram_Matching(differentiable=True)
 
         self._samples = None
 
@@ -72,14 +71,6 @@ def read_image(path, bands, quantiles=None):
 
 class DeltaTimeDataset(DeltaTimeBase):
 
-    '''augment = transforms.Compose([
-        transforms.RandomApply([
-            transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)  # not strengthened
-        ], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
-        #transforms.RandomApply([GaussianBlur([.1, 2.])], p=0.5),
-        #transforms.RandomHorizontalFlip(),
-    ])'''
     mean = [0.485, 0.456, 0.406]
     std = [0.229, 0.224, 0.225]
 
@@ -119,77 +110,81 @@ class DeltaTimeDataset(DeltaTimeBase):
         # Compute and return delta_t in days
         delta_t = abs(date2 - date1)
 
-        '''print()
-        print("Date 1: ", date1)
-        print("Date 2: ", date2)
-        print("Delta t: ", delta_t)
-        print(pathList[0])
-        print(pathList[1])
-        print()'''
+        return np.array(delta_t.days / (7*365.0))
 
-        return np.array(delta_t.days / 365.0)
-
-    def __getitem__(self, index):
+    def __getitem__(self, index, return_unmatched_t2=False):
         root = self.samples[index]
 
         # Extract two random images from the series
         sorted_paths = sorted([path for path in root.glob('*') if path.is_dir()], reverse=True)
-        if len(sorted_paths) < 2:
-            sorted_paths = [sorted_paths[0], sorted_paths[0]]
-        #rand_paths = np.random.choice(sorted_paths, 2, replace=False)
-        np.random.shuffle(sorted_paths)
-        rand_paths = sorted_paths[:2]
-        t1, t2 = [read_image(path, self.bands, QUANTILES) for path in rand_paths]
+        rand_paths = random.sample(sorted_paths, 2)        
+        try:
+            t1, t2 = [read_image(path, self.bands, QUANTILES) for path in rand_paths]
+        except:
+            print(rand_paths)
+            raise Exception("Error reading sample: ", root)
+
+        # Match histograms
+        t2_matched = match_histograms(np.array(t2), np.array(t1), channel_axis=0)
+        t2_matched = Image.fromarray(t2_matched)
 
         delta_t = self.get_delta_t(rand_paths)
         delta_t = torch.from_numpy(delta_t)
 
-        # Random Augmentations
-        #t1 = self.augment(t1)
-        #t2 = self.augment(t2)
-
         # Preprocess
-         # Apply the same random crop to query image and image to be reconstructed by the decoder
+        # Apply the same random crop to query image and image to be reconstructed by the decoder
         seed = np.random.randint(2147483647) # make a seed with numpy generator 
         random.seed(seed) # apply this seed to img transforms
         torch.manual_seed(seed)
         t1 = self.preprocess(t1)
 
         torch.manual_seed(seed)
-        t2 = self.preprocess(t2)
+        t2_matched = self.preprocess(t2_matched)
 
-        #t2 = self.HM(t2[None,...], t1[None,...]).squeeze()
+        if return_unmatched_t2:
+            torch.manual_seed(seed)
+            t2 = self.preprocess(t2)
+            return t1, t2, t2_matched, delta_t
 
-        '''print()
-        print()
-        print(t1.shape)
-        print(t2.shape)
-        print()
-        print()'''
+        return t1, t2_matched, delta_t
+
+    
+    def save_sample(self, save_dir, index=None, contrast_coeff=0.3, save_unmatched_t2=False):
+
+        if index is None:
+            index = np.random.randint(len(self))
+        
+        if save_unmatched_t2:
+            t1, t2, unmatched_t2, delta_t = self.__getitem__(index, return_unmatched_t2=save_unmatched_t2)
+        else:
+            t1, t2, delta_t = self[index]
+
+        t1 = t1.permute(1, 2, 0).numpy().squeeze()
+        t2 = t2.permute(1, 2, 0).numpy().squeeze()
+
+        t1 = (255 * np.clip(contrast_coeff + t1, 0, 1)).astype(np.uint8)
+        t2 = (255 * np.clip(contrast_coeff + t2, 0, 1)).astype(np.uint8)
+
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        
+        Image.fromarray(t1).save(os.path.join(save_dir, 't1.png'))
+        Image.fromarray(t2).save(os.path.join(save_dir, 't2.png'))
+
+        if save_unmatched_t2:
+            unmatched_t2 = unmatched_t2.permute(1, 2, 0).numpy().squeeze()
+            unmatched_t2 = (255 * np.clip(contrast_coeff + unmatched_t2, 0, 1)).astype(np.uint8)
+            Image.fromarray(unmatched_t2).save(os.path.join(save_dir, 't2_unmatched.png'))
 
         return t1, t2, delta_t
 
 if __name__ == '__main__':
-
-    def save_tensor_as_image(tensor, file_path):
-        # Normalize tensor values to [0, 1]
-        tensor = tensor.clamp(0, 1)
-        # Convert tensor to PIL image
-        image = torchvision.transforms.ToPILImage()(tensor)
-        # Save PIL image to file path
-        image.save(file_path)
     
-    
-    data_path = '/mnt/cdisk/boux/data/seco'
+    data_path = '/mnt/ddisk/boux/code/data/seco/seco_intraseasonal/train'
+    saver_dir = '/mnt/ddisk/boux/code/deltaTpredictor/image_tests'
+    idx = None
 
     dataset = DeltaTimeDataset(data_path)
-    t1, t2, delta_t = dataset[200]
+    t1, t2, delta_t = dataset.save_sample(saver_dir, index=idx, save_unmatched_t2=True)
     print()
-    print(delta_t)
-
-    print(t1.shape)
-    print(t2.shape)
-
-    saver_dir = '/mnt/cdisk/boux/code/time_diff_prediction/image_tests'
-    save_tensor_as_image(t1, os.path.join(saver_dir, 't1.png'))
-    save_tensor_as_image(t2, os.path.join(saver_dir, 't2.png'))
+    print('Delta T: {}'.format(delta_t.item()))

@@ -2,7 +2,7 @@ import os
 import random
 import shutil
 
-def split_dataset(data_path, validation_num = 200):
+def split_dataset(data_path, validation_num = 1000):
     samples = os.listdir(data_path)
     random.shuffle(samples)
 
@@ -13,7 +13,7 @@ def split_dataset(data_path, validation_num = 200):
 
 if __name__ == '__main__':
 
-    data_path = '/mnt/cdisk/boux/data/seco'
+    data_path = '/mnt/ddisk/boux/code/data/seco/seco_intraseasonal'
     train_dir = os.path.join(data_path, 'train')
     val_dir = os.path.join(data_path, 'val')
 

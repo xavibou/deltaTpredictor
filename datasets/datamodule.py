@@ -1,3 +1,4 @@
+import os
 from pytorch_lightning import LightningDataModule
 from datasets.dataset import DeltaTimeDataset
 from utils.data import InfiniteDataLoader
@@ -12,12 +13,13 @@ class DeltaTimeBaseDataModule(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.seed = seed
-
         self.train_dataset = None
+        self.val_dataset = None
 
     def setup(self, stage=None):
         train_transforms = self.train_transform() if self.train_transforms is None else self.train_transforms
-        self.train_dataset = self.get_dataset(root=self.data_dir, bands=self.bands, transform=train_transforms)
+        self.train_dataset = self.get_dataset(root=os.path.join(self.data_dir, 'train'), bands=self.bands, transform=train_transforms)
+        self.val_dataset = self.get_dataset(root=os.path.join(self.data_dir, 'val'), bands=self.bands, transform=train_transforms)
 
     @staticmethod
     def get_dataset(root, bands, transform):
@@ -36,6 +38,15 @@ class DeltaTimeBaseDataModule(LightningDataModule):
             pin_memory=True,
             drop_last=True
         )
+    def val_dataloader(self):
+        return InfiniteDataLoader(
+            dataset=self.val_dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=self.num_workers,
+            pin_memory=True,
+            drop_last=True
+        )
 
 class DeltaTimeDatamodule(DeltaTimeBaseDataModule):
 
@@ -45,4 +56,7 @@ class DeltaTimeDatamodule(DeltaTimeBaseDataModule):
 
     @staticmethod
     def train_transform():
+        return None
+    @staticmethod
+    def val_transform():
         return None

@@ -6,6 +6,10 @@ __pycache__/
 # C extensions
 *.so
 
+# Local repo files and dirs
+logs/
+validation_correlation.png
+
 # Distribution / packaging
 .Python
 build/
